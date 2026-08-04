@@ -6,7 +6,6 @@ import earthbound.bank00;
 import earthbound.bank04;
 import earthbound.bank08;
 import earthbound.external;
-import earthbound.external.audio;
 import earthbound.text;
 
 import std.array;
@@ -23,6 +22,7 @@ static import earthbound.bank03, earthbound.bank04, earthbound.bank0A, earthboun
 import replatform64;
 import replatform64.snes;
 import nspcplay;
+import spc700;
 import siryul;
 
 
@@ -41,6 +41,49 @@ struct DumpInfo {
 
 private enum audioSampleRate = 32_000;
 private enum audioChannels = 2;
+
+private struct ExtractionSPC {
+    SNES_SPC spc;
+    SPC_Filter filter;
+
+    void initialize() {
+        spc.initialize();
+        filter = SPC_Filter();
+    }
+
+    void waitUntilReady() {
+        enum maxReadySamples = audioSampleRate * 2;
+        writePort(1, 0xFF);
+        foreach (_; 0 .. maxReadySamples / 2) {
+            spc.skip(2);
+            if (readPort(1) == 0) {
+                return;
+            }
+        }
+        throw new Exception("SPC700 did not become ready while extracting sound effects");
+    }
+
+    void playSong(ubyte[] buffer, ubyte track) {
+        spc.load_buffer(buffer, 0x500);
+        spc.clear_echo();
+        filter.clear();
+        waitUntilReady();
+        writePort(0, track);
+    }
+
+    void writePort(uint id, ubyte value) {
+        spc.write_port_now(id, value);
+    }
+
+    ubyte readPort(uint id) {
+        return cast(ubyte)spc.read_port_now(id);
+    }
+
+    void fillBuffer(short[] buffer) {
+        spc.play(buffer);
+        filter.run(buffer);
+    }
+}
 
 private struct WAVHeader {
     align(1):
@@ -188,19 +231,17 @@ ubyte[] dumpSoundEffect(scope ubyte[] data, ubyte index) {
     enum maxSoundEffectSeconds = 30;
     enum maxChunks = (maxSoundEffectSeconds * audioSampleRate + framesPerChunk - 1) / framesPerChunk;
 
-    auto player = new EarthboundSPC700;
-    player.initialize(null);
-    player.loadSong(data);
-    player.changeSong(0, 0x500);
-    player.writeRegister(Register.APUIO0, 4); // port 0 is used for song playing, track 4 is silence
-    player.writeRegister(Register.APUIO3, index); // port 3 is used for sound effects
+    ExtractionSPC player;
+    player.initialize();
+    player.playSong(data, 4); // track 4 is silence
+    player.writePort(3, index); // port 3 is used for sound effects
     ubyte[] full = new ubyte[](WAVHeader.sizeof);
     (cast(WAVHeader[])(full[0 .. WAVHeader.sizeof]))[0] = WAVHeader.init;
     auto buffer = new ubyte[](chunkLength);
     size_t trailingSilentChunks;
     bool foundTrailingSilence;
     foreach (_; 0 .. maxChunks) {
-        player.audioCallback(buffer);
+        player.fillBuffer(cast(short[])buffer);
         full ~= buffer;
         if ((cast(short[])buffer).all!(sample => sample >= -silentAmplitudeThreshold && sample <= silentAmplitudeThreshold)) {
             if (++trailingSilentChunks == silentChunkThreshold) {
