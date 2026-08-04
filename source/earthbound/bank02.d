@@ -2509,6 +2509,10 @@ void resolveTargetting(Battler* battler) {
 	battlerTargetFlags = 0;
 	switch (battler.actionTargetting) {
 		case Targetted.allies | Targetted.single:
+			if ((battler.currentTarget == 0) || (battler.currentTarget > battlersTable.length)) {
+				warningf("Ignoring invalid single ally target %s", battler.currentTarget);
+				break;
+			}
 			targetBattler(battler.currentTarget - 1);
 			break;
 		case Targetted.allies | Targetted.row:
@@ -2520,10 +2524,58 @@ void resolveTargetting(Battler* battler) {
 			removeStatusUntargettableTargets();
 			break;
 		case Targetted.enemies | Targetted.single:
+			// Enemy actions aimed at the user's own side (howling, grinning, etc.)
+			// target the attacker. Do not translate them through the enemy row
+			// tables: a missed row lookup leaves currentTarget at zero.
+			if ((battler.side == BattleSide.foes) &&
+				(battleActionTable[battler.currentAction].target == ActionTarget.none)) {
+				short battlerIndex = -1;
+				for (short i = 0; i < battlersTable.length; i++) {
+					if (battler is &battlersTable[i]) {
+						battlerIndex = i;
+						break;
+					}
+				}
+				if (battlerIndex < 0) {
+					warning("Ignoring self-targeted action from a battler outside the battle table");
+					break;
+				}
+				targetBattler(battlerIndex);
+				break;
+			}
+			if ((battler.currentTarget == 0) ||
+				(numBattlersInFrontRow < 0) || (numBattlersInBackRow < 0) ||
+				(numBattlersInFrontRow > frontRowBattlers.length) ||
+				(numBattlersInBackRow > backRowBattlers.length) ||
+				(battler.currentTarget > numBattlersInFrontRow + numBattlersInBackRow)) {
+				warningf("Ignoring invalid single enemy target %s (front: %s, back: %s)",
+					battler.currentTarget, numBattlersInFrontRow, numBattlersInBackRow);
+				break;
+			}
 			if (battler.currentTarget > numBattlersInFrontRow) {
-				targetBattler(backRowBattlers[battler.currentTarget - numBattlersInFrontRow - 1]);
+				const rowIndex = battler.currentTarget - numBattlersInFrontRow - 1;
+				if (rowIndex >= backRowBattlers.length) {
+					warningf("Ignoring out-of-range back-row target %s", rowIndex);
+					break;
+				}
+				const target = backRowBattlers[rowIndex];
+				if (target >= battlersTable.length) {
+					warningf("Ignoring invalid back-row battler %s", target);
+					break;
+				}
+				targetBattler(target);
 			} else {
-				targetBattler(frontRowBattlers[battler.currentTarget - 1]);
+				const rowIndex = battler.currentTarget - 1;
+				if (rowIndex >= frontRowBattlers.length) {
+					warningf("Ignoring out-of-range front-row target %s", rowIndex);
+					break;
+				}
+				const target = frontRowBattlers[rowIndex];
+				if (target >= battlersTable.length) {
+					warningf("Ignoring invalid front-row battler %s", target);
+					break;
+				}
+				targetBattler(target);
 			}
 			if (battler.currentAction == BattleActions.psiHealingOmega) {
 				for (short i = 8; i < battlersTable.length; i++) {
@@ -2554,6 +2606,24 @@ void resolveTargetting(Battler* battler) {
 		default: break;
 	}
 	tracef("Target flags: %032b", battlerTargetFlags);
+}
+
+unittest {
+	// Self-only enemy actions must not depend on the row-position lookup.
+	battlersTable = battlersTable.init;
+	battlersTable[8].side = BattleSide.foes;
+	battlersTable[8].consciousness = 1;
+	battlersTable[8].currentAction = BattleActions.howl;
+	battlersTable[8].actionTargetting = Targetted.enemies | Targetted.single;
+	battlersTable[8].currentTarget = 0;
+	numBattlersInFrontRow = 0;
+	numBattlersInBackRow = 0;
+
+	resolveTargetting(&battlersTable[8]);
+
+	assert(isCharacterTargetted(8) != 0);
+	battlerTargetFlags = 0;
+	battlersTable = battlersTable.init;
 }
 
 /** Game loop: Battle mode. Fight enemies to the death
