@@ -8288,7 +8288,9 @@ version(configurable) {
 		bool instantSpeedText;
 		bool debugMenuButton;
 		Coordinates spawnCoordinates;
-		bool hleAudio = false;
+		// The low-level SPC700 backend can hang forever while waiting for an
+		// audio-pack upload handshake. Prefer the bounded high-level player.
+		bool hleAudio = true;
 		bool overrideSpawn() const @safe pure nothrow {
 			return (spawnCoordinates.x != 0) && (spawnCoordinates.y != 0);
 		}
@@ -8303,7 +8305,7 @@ version(configurable) {
 		enum debugMenuButton = false;
 		enum Coordinates spawnCoordinates = Coordinates.init;
 		enum bool overrideSpawn = false;
-		enum bool hleAudio = false;
+		enum bool hleAudio = true;
 	}
 }
 GameConfig config;

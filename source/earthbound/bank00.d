@@ -2247,7 +2247,8 @@ short unknownC04116(short direction) {
 	playerIntangibilityFrames = 1; //force intangibility on during search to avoid collision flags being set
 	while (true) {
 		short foundNPC = playerEntityCollisionCheck(x, y, gameState.firstPartyMemberEntity);
-		if (foundNPC > 0) {
+		// playerEntityCollisionCheck returns -1 when nothing was found; entity slot 0 is valid.
+		if (foundNPC >= 0) {
 			interactingNPCID = entityNPCIDs[foundNPC];
 			interactingNPCEntity = foundNPC;
 			break;
