@@ -7,7 +7,7 @@
 	"license": "proprietary",
 	"name": "earthbound",
 	"dependencies": {
-		"replatform64:snes": "~>0.0"
+		"replatform64:snes": "==0.0.3"
 	},
 	"stringImportPaths": [
 		"testdata"
