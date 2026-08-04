@@ -1038,6 +1038,18 @@ short reserveOverworldSpriteVRAM(short tileWidth, short tileHeight, short needle
 	return firstTile;
 }
 
+/** Releases an exact range previously returned by reserveOverworldSpriteVRAM.
+ * This is used to roll back a creation failure before an entity owns the
+ * allocation. Clearing by entity ID here could also clear an older entity
+ * when a fixed entity slot was already occupied.
+ */
+void releaseOverworldSpriteVRAM(short firstTile, short tileWidth, short tileHeight) {
+	short spriteNumTiles = cast(short)((((tileWidth + 1) & 0xFFFE) * ((tileHeight + 1) & 0xFFFE)) / 4);
+	assert(firstTile >= 0);
+	assert(firstTile + spriteNumTiles <= spriteVramTable.length);
+	spriteVramTable[firstTile .. firstTile + spriteNumTiles] = 0;
+}
+
 /// $C01D38
 void prepareSpriteMap(short arg1, short arg2, short flags, const(SpriteMapTemplates)* spriteTemplates) {
 	SpriteMap* newSpriteMap = &overworldSpriteMaps.ptr[arg1];
@@ -1070,14 +1082,21 @@ short createOverworldEntity(short sprite, short actionScript, short index, short
 	short result;
 	if (debugging != 0) {
 		if (sprite == -1) {
-			return 0;
+			return -1;
 		}
 	}
 	short newEntitySize = getOverworldSpriteTileSize(sprite);
 	short spriteMapBeginningIndex = reserveOverworldSpriteVRAM(newSpriteTileWidth, newSpriteTileHeight, index);
-	assert(spriteMapBeginningIndex >= 0);
+	if (spriteMapBeginningIndex < 0) {
+		warningf("Unable to create '%s': sprite VRAM is full", cast(OverworldSprite)sprite);
+		return -1;
+	}
 	short newSpriteMapIndex = findFreeSpriteMap(overworldSpriteTemplates[newEntitySize].count * 10);
-	assert(newSpriteMapIndex >= 0);
+	if (newSpriteMapIndex < 0) {
+		releaseOverworldSpriteVRAM(spriteMapBeginningIndex, newSpriteTileWidth, newSpriteTileHeight);
+		warningf("Unable to create '%s': the overworld spritemap table is full", cast(OverworldSprite)sprite);
+		return -1;
+	}
 	newEntityPriority = 1;
 	prepareSpriteMap(newSpriteMapIndex, spriteMapBeginningIndex, spriteGroups[sprite].spritemapFlags, &overworldSpriteTemplates[newEntitySize]);
 	if (index != -1) {
@@ -1088,6 +1107,14 @@ short createOverworldEntity(short sprite, short actionScript, short index, short
 		entityAllocationMinSlot = 0;
 		entityAllocationMaxSlot = 0x16;
 		result = initEntity(actionScript, x, y);
+	}
+	if (result < 0) {
+		freeSpritemap(&overworldSpriteMaps[newSpriteMapIndex]);
+		releaseOverworldSpriteVRAM(spriteMapBeginningIndex, newSpriteTileWidth, newSpriteTileHeight);
+		warningf("Unable to create '%s': no entity or ActionScript slot is available", cast(OverworldSprite)sprite);
+		return -1;
+	}
+	if (index == -1) {
 		spriteVramTableOverwrite(-1, cast(ubyte)(result | 0x80));
 	}
 	entitySpriteMapPointers[result] = &overworldSpriteMaps[newSpriteMapIndex];
@@ -1123,6 +1150,39 @@ short createOverworldEntity(short sprite, short actionScript, short index, short
 	entityDirections[result] = 0;
 	entityObstacleFlags[result] = 0;
 	return result;
+}
+
+unittest {
+	// A failed allocation used to return slot 0, causing the attempted sprite
+	// creation to overwrite an unrelated entity's graphics and VRAM metadata.
+	initializeEntitySubsystem();
+	auto freeEntityListBefore = entityNextEntityTable;
+	auto firstFreeEntityBefore = lastEntity;
+	lastAllocatedScript = -1;
+	assert(initEntityWipe(ActionScript.animMapObjStill, 0, 0) == -1);
+	assert(lastEntity == firstFreeEntityBefore);
+	assert(entityNextEntityTable == freeEntityListBefore);
+
+	initializeEntitySubsystem();
+	clearSpriteTable();
+	spriteVramTableOverwrite(short.min, 0);
+	// Dynamic overworld objects are limited to slots 0 through 21; party
+	// members retain the remaining slots.
+	foreach (i; 0 .. 0x16) {
+		assert(initEntityWipe(ActionScript.animMapObjStill, 0, 0) == i);
+	}
+	auto spriteVramTableBefore = spriteVramTable;
+	auto overworldSpriteMapsBefore = overworldSpriteMaps;
+	auto entityGraphicsPointerBefore = entityGraphicsPointers[0];
+	auto entityVramAddressBefore = entityVramAddresses[0];
+	assert(createOverworldEntity(OverworldSprite.fly, ActionScript.animMapObjStill, -1, 0, 0) == -1);
+	assert(spriteVramTable == spriteVramTableBefore);
+	assert(overworldSpriteMaps == overworldSpriteMapsBefore);
+	assert(entityGraphicsPointers[0] is entityGraphicsPointerBefore);
+	assert(entityVramAddresses[0] == entityVramAddressBefore);
+	initializeEntitySubsystem();
+	clearSpriteTable();
+	spriteVramTableOverwrite(short.min, 0);
 }
 
 /** Cleans up all extra entity data, such as spawned enemy count and sprites
@@ -1449,6 +1509,10 @@ void spawnEnemiesFromGroup(short tileX, short tileY, short encounterGroupID) {
 			}
 			enemySpawnTooManyEnemiesFailureCount = 0;
 			short newEntity = createOverworldEntity(sprite, script, -1, 0, 0);
+			if (newEntity < 0) {
+				enemySpawnTooManyEnemiesFailureCount++;
+				continue;
+			}
 			short newEntityX;
 			short newEntityY;
 			for (short i = 0; i != 20; i++) {
@@ -4605,6 +4669,9 @@ void createMiniGhostEntity() {
 		return;
 	}
 	miniGhostEntityID = createOverworldEntity(OverworldSprite.miniGhost, ActionScript.miniGhost, -1, 0, 0);
+	if (miniGhostEntityID < 0) {
+		return;
+	}
 	entityAnimationFrames[miniGhostEntityID] = -1;
 	entityScreenYTable[miniGhostEntityID] = -256;
 	entityAbsYTable[miniGhostEntityID] = -256;
@@ -4615,6 +4682,9 @@ void createMiniGhostEntity() {
  * Original_Address: $(DOLLAR)C0777A
  */
 void deleteMiniGhostEntity() {
+	if (miniGhostEntityID < 0) {
+		return;
+	}
 	deleteOverworldEntity(miniGhostEntityID);
 	miniGhostEntityID = -1;
 }
@@ -5863,11 +5933,17 @@ short initEntity(short actionScript, short x, short y) {
 	bool allocationFailed;
 	short newEntity = allocateEntity(allocationFailed);
 	if (allocationFailed) {
-		return 0;
+		return -1;
 	}
 	tracef("Initializing entity slot %s with %s at %s,%s", newEntity / 2, cast(ActionScript)actionScript, x, y);
-	bool __ignored;
-	short newScript = allocateScript(__ignored);
+	bool scriptAllocationFailed;
+	short newScript = allocateScript(scriptAllocationFailed);
+	if (scriptAllocationFailed) {
+		// allocateEntity has already removed this slot from the free list.
+		// Put it back before reporting that creation failed.
+		unknownC09C8F(newEntity);
+		return -1;
+	}
 	entityScriptIndexTable[newEntity / 2] = newScript;
 	entityScriptNextScripts[newScript / 2] = -1;
 	entityMoveCallbacks[newEntity / 2] = &updateActiveEntityPosition2D;

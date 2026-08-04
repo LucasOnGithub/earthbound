@@ -4040,6 +4040,9 @@ void unhideCharacterOrParty(short partyMember) {
  */
 short createPreparedEntityNPC(short npcID, short actionScript) {
 	short result = createOverworldEntity(npcConfig[npcID].sprite, actionScript, -1, entityPreparedXCoordinate, entityPreparedYCoordinate);
+	if (result < 0) {
+		return result;
+	}
 	entityDirections[result] = entityPreparedDirection;
 	entityNPCIDs[result] = npcID;
 	return result;
@@ -4054,6 +4057,9 @@ short createPreparedEntityNPC(short npcID, short actionScript) {
  */
 short createPreparedEntitySprite(short sprite, short actionScript) {
 	short result = createOverworldEntity(sprite, actionScript, -1, entityPreparedXCoordinate, entityPreparedYCoordinate);
+	if (result < 0) {
+		return result;
+	}
 	entityDirections[result] = entityPreparedDirection;
 	return result;
 }
@@ -7605,6 +7611,9 @@ void createManpu(short parent, short manpu) {
 	activeManpuX += manpuTable[manpu].relX;
 	activeManpuY += manpuTable[manpu].relY;
 	short manpuEntity = createOverworldEntity(manpuTable[manpu].sprite, ActionScript.unknown785, -1, activeManpuX, activeManpuY);
+	if (manpuEntity < 0) {
+		return;
+	}
 	entityDrawPriority[manpuEntity] = cast(ushort)(parent | DrawPriority.parent | DrawPriority.dontClearIfParent);
 	entitySurfaceFlags[manpuEntity] = entitySurfaceFlags[parent];
 }
