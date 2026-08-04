@@ -1,0 +1,9 @@
+{
+	"description": "SPC700 Emulator",
+	"license": "GPL",
+	"name": "spc700",
+	"targetType": "library",
+	"subPackages": [
+		"player"
+	]
+}
