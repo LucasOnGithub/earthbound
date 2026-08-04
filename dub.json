@@ -10,6 +10,9 @@
 		"nspcplay": {
 			"path": "dependencies/nspcplay-0.9.2"
 		},
+		"spc700": {
+			"path": "dependencies/spc700"
+		},
 		"replatform64:snes": "==0.0.3"
 	},
 	"stringImportPaths": [
