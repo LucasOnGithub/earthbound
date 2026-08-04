@@ -1,0 +1,25 @@
+{
+	"description": "NSPC player.",
+	"license": "BSL-1.0",
+	"name": "nspcplay",
+	"subPackages": [
+		"player",
+		"extract",
+		"mknspc"
+	],
+	"stringImportPaths": [ "exampledata" ],
+	"configurations": [
+		{
+			"name": "default"
+		},
+		{
+			"name": "static",
+			"dflags-windows-ldc": ["-static"]
+		},
+		{
+			"name": "shared",
+			"targetType": "dynamicLibrary",
+			"dflags-windows": ["-static"]
+		}
+	]
+}

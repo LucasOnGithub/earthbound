@@ -45,6 +45,8 @@ settings.yaml
 save.yaml
 /dump
 /data
+/build_artifacts/
+/dependencies/*.zip
 imgui.ini
 *.sav
 settings.yaml

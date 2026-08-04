@@ -7,6 +7,9 @@
 	"license": "proprietary",
 	"name": "earthbound",
 	"dependencies": {
+		"nspcplay": {
+			"path": "dependencies/nspcplay-0.9.2"
+		},
 		"replatform64:snes": "==0.0.3"
 	},
 	"stringImportPaths": [

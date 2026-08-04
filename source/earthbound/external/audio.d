@@ -237,3 +237,9 @@ class EarthboundNSPC : NSPCBase {
 	}
 	override ubyte readRegister(ushort addr) { return 0; }
 }
+
+unittest {
+	// Channel controls may arrive before the first song creates its channel state.
+	NSPCPlayer player = NSPCPlayer(32_000);
+	player.setChannelEnabled(0, false);
+}
