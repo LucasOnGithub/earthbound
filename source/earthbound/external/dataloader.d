@@ -16,7 +16,6 @@ import std.exception;
 import std.format;
 import std.logger;
 import std.meta;
-import std.parallelism;
 import std.string;
 
 static import earthbound.bank03, earthbound.bank04, earthbound.bank0A, earthbound.bank0C, earthbound.bank0E, earthbound.bank11, earthbound.bank18, earthbound.bank20, earthbound.bank21, earthbound.bank2F;
@@ -40,6 +39,9 @@ struct DumpInfo {
     ulong size;
 }
 
+private enum audioSampleRate = 32_000;
+private enum audioChannels = 2;
+
 private struct WAVHeader {
     align(1):
     static struct Chunk1 {
@@ -47,10 +49,10 @@ private struct WAVHeader {
         char[4] magic = "fmt ";
         uint size = 16;
         ushort format = 1;
-        ushort channels = 2;
-        uint sampleRate = 32000;
-        uint byteRate = 32000 * 2 * short.sizeof;
-        ushort blockAlign = short.sizeof * 2;
+        ushort channels = audioChannels;
+        uint sampleRate = audioSampleRate;
+        uint byteRate = audioSampleRate * audioChannels * short.sizeof;
+        ushort blockAlign = short.sizeof * audioChannels;
         ushort bitsPerSample = short.sizeof * 8;
     }
     static struct Chunk2 {
@@ -67,14 +69,13 @@ private struct WAVHeader {
 }
 
 void extractExtraAssets(scope AddFileFunction addFile, scope ProgressUpdateFunction reportProgress, immutable(ubyte)[] rom) {
-    reportProgress(Progress("Extracting songs"));
     ubyte[65536] song4; // we want the silent song to record sound effects against
-    buildNSPCFiles(rom, addFile, song4);
+    buildNSPCFiles(rom, addFile, reportProgress, song4);
     ubyte[][0x80] sfx;
-    static __gshared uint counter;
-    foreach (i, ref data; sfx[].parallel) {
+    reportProgress(Progress("Extracting sound effects", 0, cast(uint)sfx.length));
+    foreach (i, ref data; sfx) {
         data = dumpSoundEffect(song4[], cast(ubyte)i);
-        reportProgress(Progress("Extracting sound effects", ++counter, 127));
+        reportProgress(Progress("Extracting sound effects", cast(uint)(i + 1), cast(uint)sfx.length));
     }
     foreach (idx, sound; sfx) {
         addFile(format!"sfx/%03d.wav"(idx), sound);
@@ -84,11 +85,11 @@ void extractExtraAssets(scope AddFileFunction addFile, scope ProgressUpdateFunct
     const extractInfo = fromFile!(ExtractInfo, YAML)(extractDoc);
     infof("Building text cache...");
     auto parsedTextDocs = new StructuredText[][string][][](extractInfo.text.length);
-    counter = 0;
-    foreach (i, ref textData; parsedTextDocs.parallel) {
+    reportProgress(Progress("Extracting text", 0, cast(uint)parsedTextDocs.length));
+    foreach (i, ref textData; parsedTextDocs) {
         const textDocFile = extractInfo.text[i];
         textData = parseTextData(rom[textDocFile.offset .. textDocFile.offset + textDocFile.size], textDocFile.offset, extractInfo.renameLabels, extractInfo.text);
-        reportProgress(Progress("Extracting text", ++counter, cast(uint)parsedTextDocs.length));
+        reportProgress(Progress("Extracting text", cast(uint)(i + 1), cast(uint)parsedTextDocs.length));
     }
     foreach (textData; parsedTextDocs) {
         foreach (idx, scriptData; textData) {
@@ -107,7 +108,7 @@ void extractExtraAssets(scope AddFileFunction addFile, scope ProgressUpdateFunct
     buildTextCache(buffer);
     addFile("text", buffer.data);
 }
-void buildNSPCFiles(const ubyte[] data, scope AddFileFunction addFile, out ubyte[65536] song4) {
+void buildNSPCFiles(const ubyte[] data, scope AddFileFunction addFile, scope ProgressUpdateFunction reportProgress, out ubyte[65536] song4) {
     static align(1) struct PackPointer {
         align(1):
         ubyte bank;
@@ -120,11 +121,35 @@ void buildNSPCFiles(const ubyte[] data, scope AddFileFunction addFile, out ubyte
     enum NUM_PACKS = 0xA9;
     enum packPointerTable = 0x4F947;
     enum packTableOffset = 0x4F70A;
-    auto packs = (cast(PackPointer[])(data[packPointerTable .. packPointerTable + NUM_PACKS * PackPointer.sizeof]))
-        .map!(x => parsePacks(data[x.full - 0xC00000 .. $]));
+    enum romBase = 0xC00000;
+    void requireRange(size_t offset, size_t length, string description) {
+        enforce(offset <= data.length && length <= data.length - offset,
+            format!"Invalid EarthBound ROM: %s at 0x%X has length 0x%X, but the ROM is only 0x%X bytes"
+                (description, offset, length, data.length));
+    }
+
+    requireRange(packPointerTable, NUM_PACKS * PackPointer.sizeof, "pack pointer table");
+    auto packPointers = cast(PackPointer[])(data[packPointerTable .. packPointerTable + NUM_PACKS * PackPointer.sizeof]);
+    auto packs = packPointers.map!((pointer) {
+        enforce(pointer.full >= romBase,
+            format!"Invalid EarthBound ROM: pack address 0x%X is below ROM base 0x%X"(pointer.full, romBase));
+        const offset = cast(size_t)(pointer.full - romBase);
+        requireRange(offset, 1, "pack data");
+        return parsePacks(data[offset .. $]);
+    }).array;
+
     enum SONG_POINTER_TABLE = 0x294A;
+    requireRange(packTableOffset, (ubyte[3]).sizeof * NUM_SONGS, "song pack table");
     auto bgmPacks = cast(ubyte[3][])data[packTableOffset .. packTableOffset + (ubyte[3]).sizeof * NUM_SONGS];
-    auto songPointers = cast(ushort[])packs[1][2].data[SONG_POINTER_TABLE .. SONG_POINTER_TABLE + ushort.sizeof * NUM_SONGS];
+    enforce(packs.length > 1 && packs[1].length > 2,
+        "Invalid EarthBound ROM: engine pack does not contain the song pointer subpack");
+    const songPointerData = packs[1][2].data;
+    const songPointerBytes = ushort.sizeof * NUM_SONGS;
+    enforce(SONG_POINTER_TABLE <= songPointerData.length && songPointerBytes <= songPointerData.length - SONG_POINTER_TABLE,
+        format!"Invalid EarthBound ROM: song pointer table exceeds its pack (%s bytes required, %s available)"
+            (songPointerBytes, songPointerData.length));
+    auto songPointers = cast(ushort[])songPointerData[SONG_POINTER_TABLE .. SONG_POINTER_TABLE + songPointerBytes];
+    reportProgress(Progress("Extracting songs", 0, NUM_SONGS));
     foreach (idx, songPacks; bgmPacks) {
         NSPCWriter writer;
         writer.header.songBase = songPointers[idx];
@@ -138,22 +163,30 @@ void buildNSPCFiles(const ubyte[] data, scope AddFileFunction addFile, out ubyte
             if (pack == 0xFF) {
                 continue;
             }
+            enforce(pack < packs.length,
+                format!"Invalid EarthBound ROM: song %s references nonexistent pack %s"(idx, pack));
             writer.packs ~= packs[pack];
         }
         tracef("Writing %03X.nspc", idx);
         Appender!(ubyte[]) buffer;
         writer.toBytes(buffer);
         if (idx == 4) {
+            enforce(buffer.data.length >= NSPCFileHeader.sizeof,
+                "Invalid generated NSPC data: file is smaller than its header");
             loadAllSubpacks(song4[], buffer.data[NSPCFileHeader.sizeof .. $]);
         }
         addFile(format!"song/%03d.nspc"(idx), buffer.data);
+        reportProgress(Progress("Extracting songs", cast(uint)(idx + 1), NUM_SONGS));
     }
 }
 
 ubyte[] dumpSoundEffect(scope ubyte[] data, ubyte index) {
-    enum chunkLength = 512 * short.sizeof * 2;
+    enum framesPerChunk = 512;
+    enum chunkLength = framesPerChunk * short.sizeof * audioChannels;
     enum silentChunkThreshold = 128;
-
+    enum silentAmplitudeThreshold = 8;
+    enum maxSoundEffectSeconds = 30;
+    enum maxChunks = (maxSoundEffectSeconds * audioSampleRate + framesPerChunk - 1) / framesPerChunk;
 
     auto player = new EarthboundSPC700;
     player.initialize(null);
@@ -164,19 +197,26 @@ ubyte[] dumpSoundEffect(scope ubyte[] data, ubyte index) {
     ubyte[] full = new ubyte[](WAVHeader.sizeof);
     (cast(WAVHeader[])(full[0 .. WAVHeader.sizeof]))[0] = WAVHeader.init;
     auto buffer = new ubyte[](chunkLength);
-    size_t threshold = silentChunkThreshold;
-    while (true) {
+    size_t trailingSilentChunks;
+    bool foundTrailingSilence;
+    foreach (_; 0 .. maxChunks) {
         player.audioCallback(buffer);
-        if (buffer.all!(x => x == 0)) {
-            if (--threshold == 0) {
+        full ~= buffer;
+        if ((cast(short[])buffer).all!(sample => sample >= -silentAmplitudeThreshold && sample <= silentAmplitudeThreshold)) {
+            if (++trailingSilentChunks == silentChunkThreshold) {
+                foundTrailingSilence = true;
                 break;
             }
         } else {
-            threshold = silentChunkThreshold;
+            trailingSilentChunks = 0;
         }
-        full ~= buffer;
     }
-    full = full[0 .. max(WAVHeader.sizeof + chunkLength, $ - chunkLength * (silentChunkThreshold - 1))];
+    if (!foundTrailingSilence) {
+        warningf("Sound effect %s did not become silent after %s seconds; truncating it", index, maxSoundEffectSeconds);
+    }
+    const renderedChunks = (full.length - WAVHeader.sizeof) / chunkLength;
+    const chunksToKeep = max(cast(size_t)1, renderedChunks - trailingSilentChunks);
+    full.length = WAVHeader.sizeof + chunksToKeep * chunkLength;
     with((cast(WAVHeader[])(full[0 .. WAVHeader.sizeof]))[0]) {
         chunk2.size = cast(uint)(full.length - WAVHeader.sizeof);
         chunkSize = cast(uint)(full.length - 8);
